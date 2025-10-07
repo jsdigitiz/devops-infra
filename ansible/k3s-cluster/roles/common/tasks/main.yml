@@ -1,0 +1,60 @@
+---
+# roles/common/tasks/main.yml
+- name: Ensure hostname is set
+  hostname:
+    name: "{{ inventory_hostname }}"
+
+- name: Add hosts entries
+  lineinfile:
+    path: /etc/hosts
+    line: "{{ item }}"
+    state: present
+  loop: "{{ host_entries | default([]) }}"
+
+- name: Disable swap
+  command: swapoff -a
+  when: ansible_swaptotal_mb > 0
+
+- name: Remove swap entry from /etc/fstab
+  replace:
+    path: /etc/fstab
+    regexp: '^([^#].*\sswap\s)\w+\s.*$'
+    replace: '# \1'
+
+- name: Install base packages
+  apt:
+    name:
+      - curl
+      - ca-certificates
+      - gnupg
+      - lsb-release
+      - nfs-common
+      - iptables
+      - software-properties-common
+    update_cache: true
+    state: present
+
+- name: Set timezone
+  timezone:
+    name: "{{ system_timezone | default('UTC') }}"
+    
+- name: Load br_netfilter kernel module
+  modprobe:
+    name: br_netfilter
+    state: present
+
+- name: Ensure br_netfilter is loaded on boot
+  copy:
+    dest: /etc/modules-load.d/k8s.conf
+    content: |
+      br_netfilter
+- name: Ensure sysctl params for Kubernetes
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: yes
+  with_items:
+    - { key: 'net.bridge.bridge-nf-call-iptables', value: 1 }
+    - { key: 'net.ipv4.ip_forward', value: 1 }
+    - { key: 'net.bridge.bridge-nf-call-ip6tables', value: 1 }

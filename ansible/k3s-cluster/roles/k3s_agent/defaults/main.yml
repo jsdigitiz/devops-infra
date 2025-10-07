@@ -1,0 +1,4 @@
+# roles/k3s_agent/defaults/main.yml
+k3s_version: "v1.33.3+k3s1"
+# Set to true if you want to taint worker nodes (prevents scheduling on workers)
+k3s_worker_taint: false

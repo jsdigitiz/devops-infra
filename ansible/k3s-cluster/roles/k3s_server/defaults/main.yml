@@ -1,0 +1,4 @@
+# roles/k3s_server/defaults/main.yml
+# Generate strong token with: openssl rand -base64 48
+k3s_token: "{{ lookup('env', 'K3S_TOKEN') | default(lookup('password', '/dev/null chars=ascii_letters,digits length=64'), true) }}"
+k3s_version: "v1.33.3+k3s1"

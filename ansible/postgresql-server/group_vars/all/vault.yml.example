@@ -1,0 +1,7 @@
+---
+# Example vault file - copy to vault.yml and encrypt with:
+# ansible-vault encrypt group_vars/all/vault.yml
+
+vault_ansible_password: "your-ssh-password"
+vault_ansible_sudo_pass: "your-sudo-password"
+vault_postgresql_bamboo_password: "generate-strong-password-here"

@@ -1,0 +1,9 @@
+# roles/k3s_server/templates/config.yaml.j2
+write-kubeconfig-mode: "0644"
+token: "{{ k3s_token }}"
+tls-san:
+  - "{{ ansible_host }}"
+disable:
+  - traefik
+  - servicelb
+  - metrics-server

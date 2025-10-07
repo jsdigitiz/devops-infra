@@ -1,0 +1,170 @@
+---
+# PostgreSQL installation and configuration
+
+- name: Install PostgreSQL repository key
+  apt_key:
+    url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+    state: present
+
+- name: Add PostgreSQL repository
+  apt_repository:
+    repo: "deb http://apt.postgresql.org/pub/repos/apt {{ ansible_distribution_release }}-pgdg main"
+    state: present
+    filename: pgdg
+
+- name: Install PostgreSQL packages
+  apt:
+    name:
+      - "postgresql-{{ postgresql_version }}"
+      - "postgresql-contrib-{{ postgresql_version }}"
+      - postgresql-client
+      - python3-psycopg2
+    state: present
+    update_cache: true
+
+- name: Ensure PostgreSQL is running and enabled
+  systemd:
+    name: postgresql
+    state: started
+    enabled: true
+
+- name: Configure PostgreSQL listen addresses
+  lineinfile:
+    path: "/etc/postgresql/{{ postgresql_version }}/main/postgresql.conf"
+    regexp: "^#?listen_addresses"
+    line: "listen_addresses = '{{ postgresql_listen_addresses }}'"
+    state: present
+  notify: restart postgresql
+
+- name: Configure PostgreSQL port
+  lineinfile:
+    path: "/etc/postgresql/{{ postgresql_version }}/main/postgresql.conf"
+    regexp: "^#?port"
+    line: "port = {{ postgresql_port }}"
+    state: present
+  notify: restart postgresql
+
+- name: Configure PostgreSQL max_connections
+  lineinfile:
+    path: "/etc/postgresql/{{ postgresql_version }}/main/postgresql.conf"
+    regexp: "^#?max_connections"
+    line: "max_connections = {{ postgresql_max_connections }}"
+    state: present
+  notify: restart postgresql
+
+- name: Configure PostgreSQL shared_buffers
+  lineinfile:
+    path: "/etc/postgresql/{{ postgresql_version }}/main/postgresql.conf"
+    regexp: "^#?shared_buffers"
+    line: "shared_buffers = {{ postgresql_shared_buffers }}"
+    state: present
+  notify: restart postgresql
+
+- name: Configure PostgreSQL effective_cache_size
+  lineinfile:
+    path: "/etc/postgresql/{{ postgresql_version }}/main/postgresql.conf"
+    regexp: "^#?effective_cache_size"
+    line: "effective_cache_size = {{ postgresql_effective_cache_size }}"
+    state: present
+  notify: restart postgresql
+
+- name: Configure PostgreSQL work_mem
+  lineinfile:
+    path: "/etc/postgresql/{{ postgresql_version }}/main/postgresql.conf"
+    regexp: "^#?work_mem"
+    line: "work_mem = {{ postgresql_work_mem }}"
+    state: present
+  notify: restart postgresql
+
+- name: Configure PostgreSQL maintenance_work_mem
+  lineinfile:
+    path: "/etc/postgresql/{{ postgresql_version }}/main/postgresql.conf"
+    regexp: "^#?maintenance_work_mem"
+    line: "maintenance_work_mem = {{ postgresql_maintenance_work_mem }}"
+    state: present
+  notify: restart postgresql
+
+- name: Configure PostgreSQL password encryption
+  lineinfile:
+    path: "/etc/postgresql/{{ postgresql_version }}/main/postgresql.conf"
+    regexp: "^#?password_encryption"
+    line: "password_encryption = {{ postgresql_password_encryption }}"
+    state: present
+  notify: restart postgresql
+
+- name: Configure pg_hba.conf for local connections
+  template:
+    src: pg_hba.conf.j2
+    dest: "/etc/postgresql/{{ postgresql_version }}/main/pg_hba.conf"
+    owner: postgres
+    group: postgres
+    mode: '0640'
+  notify: restart postgresql
+
+- name: Flush handlers to restart PostgreSQL if needed
+  meta: flush_handlers
+
+- name: Create PostgreSQL databases
+  postgresql_db:
+    name: "{{ item.name }}"
+    encoding: "{{ item.encoding | default('UTF8') }}"
+    lc_collate: "{{ item.lc_collate | default('en_US.UTF-8') }}"
+    lc_ctype: "{{ item.lc_ctype | default('en_US.UTF-8') }}"
+    state: present
+  become_user: postgres
+  loop: "{{ postgresql_databases }}"
+
+- name: Create PostgreSQL users
+  postgresql_user:
+    name: "{{ item.name }}"
+    password: "{{ item.password }}"
+    db: "{{ item.db }}"
+    priv: "{{ item.priv | default('ALL') }}"
+    state: present
+  become_user: postgres
+  loop: "{{ postgresql_users }}"
+  no_log: true
+
+- name: Create backup directory
+  file:
+    path: "{{ postgresql_backup_dir }}"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: '0750'
+  when: postgresql_backup_enabled
+
+- name: Install backup script
+  template:
+    src: backup.sh.j2
+    dest: /usr/local/bin/postgresql-backup.sh
+    owner: root
+    group: root
+    mode: '0750'
+  when: postgresql_backup_enabled
+
+- name: Install AWS CLI for S3 backups
+  apt:
+    name: awscli
+    state: present
+  when: postgresql_backup_enabled and postgresql_backup_s3_enabled
+
+- name: Setup daily backup cron job
+  cron:
+    name: "PostgreSQL daily backup"
+    minute: "0"
+    hour: "2"
+    job: "/usr/local/bin/postgresql-backup.sh >> /var/log/postgresql-backup.log 2>&1"
+    user: root
+    state: present
+  when: postgresql_backup_enabled
+
+- name: Setup backup retention cleanup cron job
+  cron:
+    name: "PostgreSQL backup cleanup"
+    minute: "30"
+    hour: "3"
+    job: "find {{ postgresql_backup_dir }} -type f -name '*.sql.gz' -mtime +{{ postgresql_backup_retention_days }} -delete"
+    user: root
+    state: present
+  when: postgresql_backup_enabled

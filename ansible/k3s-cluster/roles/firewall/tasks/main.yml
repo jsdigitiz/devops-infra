@@ -1,0 +1,47 @@
+---
+# Minimal firewall setup for K3s
+- name: Install ufw
+  apt:
+    name: ufw
+    state: present
+    update_cache: yes
+
+- name: Reset ufw to defaults
+  ufw:
+    state: reset
+
+- name: Set default policies
+  ufw:
+    policy: "{{ item.policy }}"
+    direction: "{{ item.direction }}"
+  loop:
+    - { policy: deny, direction: incoming }
+    - { policy: allow, direction: outgoing }
+
+- name: Allow SSH
+  ufw:
+    rule: allow
+    port: '22'
+    proto: tcp
+
+- name: Allow K3s API server
+  ufw:
+    rule: allow
+    port: '6443'
+    proto: tcp
+
+- name: Allow Flannel VXLAN
+  ufw:
+    rule: allow
+    port: '8472'
+    proto: udp
+
+- name: Allow kubelet
+  ufw:
+    rule: allow
+    port: '10250'
+    proto: tcp
+
+- name: Enable firewall
+  ufw:
+    state: enabled

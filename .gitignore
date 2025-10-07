@@ -1,0 +1,108 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Ansible
+*.retry
+*.log
+.vault_pass
+.vault_password
+vault-password.txt
+ansible.cfg.local
+
+# Ansible sensitive files
+**/vault.yml
+!**/vault.yml.example
+**/secrets.yml
+!**/secrets.yml.example
+**/credentials.yml
+!**/credentials.yml.example
+
+# Terraform
+*.tfstate
+*.tfstate.*
+*.tfvars
+!example.tfvars
+.terraform/
+.terraform.lock.hcl
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Kubernetes
+kubeconfig
+*.kubeconfig
+.kube/
+**/kube-config*
+!**/kube-config*.example
+
+# SSH Keys
+*.pem
+*.key
+*.pub
+id_rsa*
+id_ed25519*
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# IDE and Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+*.sublime-*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+env/
+ENV/
+
+# Node (if using any JS tools)
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Certificates and keys
+*.crt
+*.cer
+*.p12
+*.pfx
+*.jks
+
+# Backup files
+*.orig
+*.bkp

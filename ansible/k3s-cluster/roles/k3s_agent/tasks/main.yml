@@ -1,0 +1,29 @@
+---
+# Ultra simple k3s agent installation
+- name: Get server token
+  shell: cat /var/lib/rancher/k3s/server/node-token
+  register: server_token
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+
+- name: Install k3s agent
+  shell: |
+    curl -sfL https://get.k3s.io | K3S_URL="{{ k3s_server_url }}" K3S_TOKEN="{{ server_token.stdout.strip() }}" INSTALL_K3S_VERSION="{{ k3s_version }}" sh -s - agent --with-node-id
+  args:
+    creates: /usr/local/bin/k3s
+
+- name: Wait for agent to join cluster
+  pause:
+    seconds: 30
+
+- name: Label node as worker
+  shell: |
+    kubectl label node {{ inventory_hostname }} node-role.kubernetes.io/worker=worker --overwrite
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+  failed_when: false
+
+- name: Add node type taint (optional)
+  shell: |
+    kubectl taint node {{ inventory_hostname }} node-role.kubernetes.io/worker=worker:NoSchedule --overwrite
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+  failed_when: false
+  when: k3s_worker_taint | default(false)

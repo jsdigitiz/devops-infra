@@ -1,0 +1,8 @@
+# PostgreSQL Server Inventory
+[postgresql_servers]
+server-db ansible_host=192.168.3.100
+
+[postgresql_servers:vars]
+ansible_user=ops
+ansible_password={{ vault_ansible_password }}
+ansible_sudo_pass={{ vault_ansible_sudo_pass }}

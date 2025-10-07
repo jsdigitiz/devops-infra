@@ -1,0 +1,12 @@
+# inventory/production.ini
+[k3s_servers]
+server1 ansible_host=192.168.3.100
+
+[k3s_agents]
+agent1 ansible_host=192.168.3.101
+
+[all:vars]
+ansible_user=ops
+ansible_password=sudopass
+ansible_sudo_pass=sudopass
+k3s_server_url=https://192.168.3.100:6443

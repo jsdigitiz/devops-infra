@@ -1,0 +1,22 @@
+---
+# playbooks/k3s-cluster/site.yml
+- name: Prepare all nodes
+  hosts: all
+  become: true
+  roles:
+    - common
+    - firewall
+
+- name: Setup K3s Server Nodes
+  hosts: k3s_servers
+  become: true
+  roles:
+    - k3s_server
+  serial: 1
+
+- name: Setup K3s Agent Nodes
+  hosts: k3s_agents
+  become: true
+  roles:
+    - k3s_agent
+  serial: 1

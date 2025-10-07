@@ -1,0 +1,7 @@
+---
+# PostgreSQL Server Installation Playbook
+- name: Install and configure PostgreSQL server
+  hosts: postgresql_servers
+  become: true
+  roles:
+    - postgresql
