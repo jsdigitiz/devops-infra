@@ -1,0 +1,604 @@
+# Production Values for Bamboo Data Center 11.0
+# Chart Version: 2.0.4 (App Version: 11.0.4)
+# Based on official Atlassian Helm Chart
+# Repository: https://atlassian.github.io/data-center-helm-charts
+#
+# Full values reference: helm show values atlassian-data-center/bamboo --version 2.0.4
+
+# =============================================================================
+# REPLICA CONFIGURATION
+# =============================================================================
+# Bamboo DC uses active-passive clustering - only 1 pod recommended
+# https://atlassian.github.io/data-center-helm-charts/troubleshooting/LIMITATIONS#cluster-size
+replicaCount: 1
+
+ordinals:
+  enabled: false
+  start: 0
+
+# StatefulSet Update Strategy
+# Controls how Bamboo pods are updated when you upgrade the Helm chart
+# https://kubernetes.io/docs/tutorials/stateful-application/basic-stateful-set/#updating-statefulsets
+#
+# Options:
+# 1. RollingUpdate (default) - Automatic rolling updates
+#    - Pods are updated one by one automatically
+#    - New pod starts before old one terminates
+#    - Safest for most scenarios
+#    - Use this for production with replicaCount: 1
+#
+# 2. OnDelete - Manual updates (more control)
+#    - Pods are NOT automatically updated
+#    - You must manually delete pods to trigger update
+#    - Useful when you want precise control over update timing
+#    - Good for maintenance windows
+#
+# Examples:
+updateStrategy: {}  # Uses default RollingUpdate
+  # type: RollingUpdate  # Explicit RollingUpdate (default)
+  # type: OnDelete       # Manual update - delete pod to trigger update
+
+# =============================================================================
+# IMAGE CONFIGURATION
+# =============================================================================
+image:
+  repository: atlassian/bamboo
+  pullPolicy: IfNotPresent
+  tag: "11.0.4"  # Latest Bamboo Data Center version
+
+# =============================================================================
+# SERVICE ACCOUNT
+# =============================================================================
+serviceAccount:
+  create: true
+  name:
+  imagePullSecrets: []
+  annotations: {}
+
+# =============================================================================
+# DATABASE CONFIGURATION (REQUIRED)
+# =============================================================================
+# Connects to PostgreSQL server deployed via Ansible
+# See: ansible/postgresql-server/README.md
+database:
+  type: postgresql
+  url: jdbc:postgresql://192.168.3.100:5432/bamboo
+  credentials:
+    secretName: bamboo-db-credentials
+    usernameSecretKey: username
+    passwordSecretKey: password
+
+# =============================================================================
+# VOLUME CONFIGURATION (REQUIRED)
+# =============================================================================
+# Bamboo requires two types of persistent storage:
+# 1. Local Home - pod-specific data (build configs, artifacts cache)
+# 2. Shared Home - shared data across pods (build results, reports)
+#
+# Storage Options:
+# - local-path: K3s default, single-node only
+# - NFS: Network file system, supports multi-node
+# - Cloud storage: EBS (AWS), Azure Disk, GCE PD
+# =============================================================================
+volumes:
+  # ---------------------------------------------------------------------------
+  # LOCAL HOME - Individual pod data
+  # ---------------------------------------------------------------------------
+  # Each Bamboo pod needs its own local-home volume for:
+  # - Build cache
+  # - Temp files
+  # - Pod-specific configuration
+  #
+  localHome:
+    persistentVolumeClaim:
+      create: true
+      storageClassName: local-path  # K3s default storage class
+      resources:
+        requests:
+          storage: 10Gi
+
+      # PVC retention policy (requires K8s 1.27+ with StatefulSetAutoDeletePVC feature gate)
+      # Controls what happens to PVCs when StatefulSet is deleted or scaled down
+      persistentVolumeClaimRetentionPolicy:
+        whenDeleted:  # Leave empty for Retain (default), or set to "Delete"
+        whenScaled:   # Leave empty for Retain (default), or set to "Delete"
+
+    # For static provisioning (pre-created PVs)
+    customVolume: {}
+    # customVolume:
+    #   persistentVolumeClaim:
+    #     claimName: "bamboo-local-home-pvc"
+
+    mountPath: "/var/atlassian/application-data/bamboo"
+    subPath:
+
+  # ---------------------------------------------------------------------------
+  # SHARED HOME - Shared data across pods
+  # ---------------------------------------------------------------------------
+  # Required for multi-node Bamboo DC deployment
+  # Stores: build results, reports, artifacts, plugins
+  #
+  sharedHome:
+    # ==========================================================================
+    # OPTION 1: Local Storage (single-node K3s) - CURRENT CONFIG
+    # ==========================================================================
+    persistentVolumeClaim:
+      create: true
+      accessModes:
+        - ReadWriteOnce  # Single node access only
+      storageClassName: local-path  # K3s default
+      resources:
+        requests:
+          storage: 20Gi
+    customVolume: {}
+
+    # ==========================================================================
+    # OPTION 2: NFS Storage (multi-node cluster)
+    # ==========================================================================
+    # Uncomment and configure for NFS-based shared storage
+    # Requires: NFS server provisioned and accessible from K8s cluster
+    #
+    # persistentVolumeClaim:
+    #   create: true
+    #   accessModes:
+    #     - ReadWriteMany  # Multiple pods can read/write simultaneously
+    #   storageClassName: nfs-client  # NFS storage class name
+    #   resources:
+    #     requests:
+    #       storage: 50Gi  # Larger for shared artifacts
+    # customVolume: {}
+
+    # ==========================================================================
+    # OPTION 3: Static NFS Volume (manual PV/PVC)
+    # ==========================================================================
+    # For manually created NFS PersistentVolume
+    #
+    # Step 1: Create NFS PersistentVolume (apply separately):
+    # ---
+    # apiVersion: v1
+    # kind: PersistentVolume
+    # metadata:
+    #   name: bamboo-shared-home-pv
+    # spec:
+    #   capacity:
+    #     storage: 50Gi
+    #   accessModes:
+    #     - ReadWriteMany
+    #   nfs:
+    #     server: 192.168.3.100  # Your NFS server IP
+    #     path: /export/bamboo-shared  # NFS export path
+    #   mountOptions:
+    #     - nfsvers=4.1
+    #     - hard
+    #     - intr
+    # ---
+    #
+    # Step 2: Configure values to use static PVC:
+    # persistentVolumeClaim:
+    #   create: false  # Don't create PVC dynamically
+    # customVolume:
+    #   persistentVolumeClaim:
+    #     claimName: bamboo-shared-home-pvc  # Name of manually created PVC
+
+    # ==========================================================================
+    # OPTION 4: Cloud Provider Storage (AWS EFS, Azure Files, GCE Filestore)
+    # ==========================================================================
+    # For AWS EFS (Elastic File System):
+    # persistentVolumeClaim:
+    #   create: true
+    #   accessModes:
+    #     - ReadWriteMany
+    #   storageClassName: efs-sc  # AWS EFS storage class
+    #   resources:
+    #     requests:
+    #       storage: 50Gi
+    #
+    # For Azure Files:
+    # persistentVolumeClaim:
+    #   create: true
+    #   accessModes:
+    #     - ReadWriteMany
+    #   storageClassName: azurefile  # Azure Files storage class
+    #   resources:
+    #     requests:
+    #       storage: 50Gi
+
+    mountPath: "/var/atlassian/application-data/shared-home"
+    subPath:
+
+    # NFS Permission Fixer
+    # Fixes common NFS permission issues by ensuring correct ownership
+    # https://github.com/kubernetes/examples/issues/260
+    nfsPermissionFixer:
+      enabled: true  # Set to true when using NFS
+      mountPath: "/shared-home"
+      imageRepo: alpine
+      imageTag: latest
+      resources: {}
+      # resources:
+      #   requests:
+      #     cpu: "50m"
+      #     memory: "32Mi"
+      #   limits:
+      #     cpu: "100m"
+      #     memory: "64Mi"
+
+      # Custom command to fix permissions (default sets GID 2005)
+      # Override if you need different ownership
+      command:
+      # command: |
+      #   chown -R 2005:2005 /shared-home
+      #   chmod -R 770 /shared-home
+
+  # ---------------------------------------------------------------------------
+  # ADDITIONAL VOLUMES
+  # ---------------------------------------------------------------------------
+  # Add extra volumes for plugins, certificates, or custom data
+  #
+  additional: []
+  # additional:
+  #   - name: plugins
+  #     emptyDir: {}
+  #   - name: custom-certs
+  #     secret:
+  #       secretName: bamboo-custom-certs
+  #   - name: shared-scripts
+  #     configMap:
+  #       name: bamboo-scripts
+  #       defaultMode: 0755
+
+# =============================================================================
+# INGRESS CONFIGURATION
+# =============================================================================
+ingress:
+  create: true
+  openShiftRoute: false
+  routeHttpHeaders: {}
+
+  # K3s uses Traefik by default, change to "nginx" if using nginx ingress
+  className: "traefik"
+  nginx: false  # Set to true if using nginx ingress controller
+
+  maxBodySize: 250m
+  proxyConnectTimeout: 60
+  proxyReadTimeout: 60
+  proxySendTimeout: 60
+
+  # Your domain configuration
+  host: bamboo.example.com  # CHANGE THIS TO YOUR DOMAIN
+  path: "/"
+
+  # HTTPS/TLS configuration
+  https: true
+  tlsSecretName: bamboo-tls  # Name of the TLS secret containing your certificate
+
+  # ==========================================================================
+  # TLS/SSL Certificate Options (choose one):
+  # ==========================================================================
+  #
+  # Option 1: Use cert-manager (automated Let's Encrypt certificates)
+  # - Uncomment the cert-manager.io/cluster-issuer annotation below
+  # - Requires cert-manager installed in cluster
+  # - Certificates auto-renewed
+  #
+  # Option 2: Use your own certificate (manual)
+  # - Create a TLS secret with your certificate (see secrets.yaml.example)
+  # - Comment out or remove the cert-manager.io/cluster-issuer annotation
+  # - Example: kubectl create secret tls bamboo-tls \
+  #     --cert=/path/to/tls.crt --key=/path/to/tls.key -n bamboo
+  # ==========================================================================
+
+  # Traefik-specific annotations (K3s default)
+  annotations:
+    # OPTION 1: Uncomment line below to use cert-manager for automatic certificates
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+
+    # OPTION 2: For own certificate, just comment out cert-manager line above
+    # The tlsSecretName (bamboo-tls) will be used automatically
+
+    # Traefik router configuration
+    traefik.ingress.kubernetes.io/router.middlewares: default-redirect-https@kubernetescrd
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+
+  # ==========================================================================
+  # For nginx ingress controller, use these annotations instead:
+  # ==========================================================================
+  # annotations:
+  #   # OPTION 1: cert-manager
+  #   cert-manager.io/cluster-issuer: letsencrypt-prod
+  #
+  #   # OPTION 2: own certificate - comment out cert-manager line above
+  #   # The tlsSecretName will be used automatically
+  #
+  #   # Nginx configuration
+  #   nginx.ingress.kubernetes.io/proxy-body-size: 250m
+  #   nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+  #   nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+  #   nginx.ingress.kubernetes.io/ssl-redirect: "true"
+
+# =============================================================================
+# BAMBOO APPLICATION CONFIGURATION
+# =============================================================================
+bamboo:
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 80
+    loadBalancerIP:
+    contextPath:
+    sessionAffinity: None
+    sessionAffinityConfig:
+      clientIP:
+        timeoutSeconds: 10800
+    annotations: {}
+
+  # Shutdown configuration
+  shutdown:
+    terminationGracePeriodSeconds: 30
+    command: "/shutdown-wait.sh"
+
+  # Security context for Bamboo pod
+  securityContext:
+    fsGroup: 2005  # Bamboo user group
+
+  # Container security context
+  securityContextEnabled: true
+  containerSecurityContext:
+    runAsUser: 2005
+    runAsGroup: 2005
+    runAsNonRoot: true
+
+  # Port configuration
+  ports:
+    http: 8085
+    hazelcast: 5701
+    jms: 54663
+
+  # Unattended setup - set to true for automated setup (requires all secrets configured)
+  unattendedSetup: false  # Set to true after configuring all secrets
+
+  # License configuration (optional - can be added via UI)
+  license:
+    secretName: bamboo-license
+    secretKey: license-key
+
+  # System admin credentials (required for unattended setup)
+  sysadminCredentials:
+    secretName: bamboo-admin-credentials
+    usernameSecretKey: username
+    passwordSecretKey: password
+    displayNameSecretKey: displayName
+    emailAddressSecretKey: emailAddress
+
+  # Security token for Bamboo agents
+  securityToken:
+    secretName: bamboo-security-token
+    secretKey: security-token
+
+  # Import existing data (optional)
+  import:
+    type:  # Leave empty for fresh install, use "import" for existing data
+    path:
+
+  # Broker URL configuration
+  brokerUrl:
+    secretName:
+    secretKey: broker-url
+
+  # Disable agent authentication (not recommended for production)
+  disableAgentAuth: false
+
+  # Server ID (auto-generated if not specified)
+  bambooServerName:
+
+  # Home directory configuration
+  setPermissions: true
+
+  # Readiness probe
+  readinessProbe:
+    enabled: true
+    initialDelaySeconds: 60
+    periodSeconds: 10
+    timeoutSeconds: 1
+    failureThreshold: 30
+    customProbe: {}
+
+  # Liveness probe
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 300
+    periodSeconds: 20
+    timeoutSeconds: 1
+    failureThreshold: 12
+    customProbe: {}
+
+  # Startup probe (optional)
+  startupProbe:
+    enabled: false
+    initialDelaySeconds: 60
+    periodSeconds: 10
+    failureThreshold: 120
+
+  # Resource allocation
+  resources:
+    jvm:
+      maxHeap: "2g"
+      minHeap: "1g"
+      reservedCodeCache: "512m"
+    container:
+      requests:
+        cpu: "1"
+        memory: "3Gi"
+      limits:
+        cpu: "2"
+        memory: "4Gi"
+
+  # Additional JVM arguments
+  additionalJvmArgs:
+    - -Datlassian.plugins.enable.wait=300
+    - -XX:+UseG1GC
+    - -XX:MaxGCPauseMillis=200
+
+  # Additional init containers
+  additionalInitContainers: []
+
+  # Additional containers (sidecars)
+  additionalContainers: []
+
+  # Additional volume mounts
+  additionalVolumeMounts: []
+
+  # Additional environment variables
+  additionalEnvironmentVariables: []
+  # - name: BAMBOO_SERVER_ID
+  #   value: "bamboo-prod"
+
+  # Additional certificates
+  additionalCertificates:
+    secretName:
+    customCmd:
+
+  # Additional libraries
+  additionalLibraries: []
+
+  # Additional bundled plugins
+  additionalBundledPlugins: []
+
+  # Clustering configuration
+  clustering:
+    enabled: false  # Enable for multi-node setup
+    usePodNameAsClusterNodeName: true
+    group:
+      nameSecretKey:
+      passwordSecretKey:
+
+  # Tomcat configuration
+  tomcatConfig:
+    acceptCount: "10"
+    connectionTimeout: "20000"
+    customServerXml:
+    enableLookups: "false"
+    maxHttpHeaderSize: "8192"
+    maxThreads: "150"
+    minSpareThreads: "25"
+    port: "8085"
+    protocol: "HTTP/1.1"
+    proxyName:
+    proxyPort:
+    redirectPort: "8443"
+    scheme:
+    secure:
+    generateByHelm: false
+    mgmtPort: "8005"
+
+  # Seraph configuration
+  seraphConfig:
+    autoLoginCookieAge: "1209600"
+    generateByHelm: false
+
+  # Access log configuration
+  accessLog:
+    mountPath: "/opt/atlassian/bamboo/logs"
+    persistentVolumeClaim:
+      create: false
+      storageClassName:
+      resources:
+        requests:
+          storage: 1Gi
+    customVolume: {}
+    localHomeSubPath: "log"
+
+# =============================================================================
+# SCHEDULING CONFIGURATION
+# =============================================================================
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+priorityClassName:
+
+topologySpreadConstraints: []
+
+# =============================================================================
+# MONITORING & OBSERVABILITY
+# =============================================================================
+monitoring:
+  # JMX metrics export for Prometheus
+  exposeJmxMetrics: true
+  jmxExporterPort: 9999
+  jmxExporterInitContainer:
+    customSecurityContext: {}
+    customJmxExporterJar:
+    runAsRoot: true
+    resources: {}
+
+  # ServiceMonitor for Prometheus Operator
+  serviceMonitor:
+    create: false
+    prometheusLabelSelector: {}
+    scrapeIntervalSeconds: 30
+
+  # Grafana dashboard
+  grafana:
+    createDashboards: false
+    dashboardLabels: {}
+
+# Fluentd logging (optional)
+fluentd:
+  enabled: false
+  imageName: fluent/fluentd-kubernetes-daemonset
+  imageTag: v1.14-debian-elasticsearch7-1
+  customConfigFile: false
+  elasticsearch:
+    enabled: true
+    hostname: elasticsearch
+    indexNamePrefix: bamboo
+  httpPort: 9880
+  extraVolumes: []
+  resources: {}
+
+# =============================================================================
+# OPENSHIFT CONFIGURATION
+# =============================================================================
+openshift:
+  runWithRestrictedSCC: false
+
+# =============================================================================
+# POD CONFIGURATION
+# =============================================================================
+# Pod labels
+podLabels: {}
+  # environment: production
+  # team: devops
+
+# Pod annotations
+podAnnotations: {}
+  # prometheus.io/scrape: "true"
+  # prometheus.io/port: "9999"
+
+# Service annotations
+serviceAnnotations: {}
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: false
+  labels: {}
+  annotations: {}
+  minAvailable:
+  maxUnavailable:
+
+# =============================================================================
+# TEST PODS CONFIGURATION
+# =============================================================================
+testPods:
+  annotations: {}
+  labels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  schedulerName:
+  image:
+    permissionsTestContainer: debian:stable-slim
+    statusTestContainer: alpine:latest
