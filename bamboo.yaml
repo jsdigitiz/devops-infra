@@ -1,0 +1,824 @@
+# ============================================================================
+# Bamboo Data Center - Production-Ready Helm Values
+# DevOps Best Practices for Enterprise Deployment
+# ============================================================================
+# Chart: atlassian/bamboo
+# Maintained by: Platform Team
+# Version: Compatible with Bamboo 10.x+
+# ============================================================================
+
+# ============================================================================
+# CORE APPLICATION SETTINGS
+# ============================================================================
+replicaCount: 2
+
+image:
+  repository: atlassian/bamboo
+  tag: "10.2.8"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+# - name: docker-registry-secret
+
+nameOverride: "bamboo"
+fullnameOverride: "bamboo-dc"
+
+# ============================================================================
+# BAMBOO CONFIGURATION
+# ============================================================================
+bamboo:
+  # Clustering must be enabled for Data Center
+  clustering:
+    enabled: true
+    group: "bamboo-prod-cluster"
+  
+  # System admin configuration
+  sysadmin:
+    username: "admin"
+    password: ""  # Set via external secret
+    displayName: "Bamboo Administrator"
+    emailAddress: "bamboo-admin@example.com"
+  
+  # Application settings
+  baseUrl: "https://bamboo.example.com"
+  edition: "DATA_CENTER"
+  
+  # License configuration - CRITICAL for DC
+  license:
+    secretName: "bamboo-license-secret"
+    secretKey: "license-key"
+  
+  # JVM Configuration - Production tuned for Java 17
+  jvm:
+    minHeap: "2048m"
+    maxHeap: "4096m"
+    reservedCodeCache: "512m"
+    
+    # Advanced JVM options for production (Java 17 optimized)
+    additionalJvmArgs:
+      - "-XX:+UseG1GC"
+      - "-XX:+ParallelRefProcEnabled"
+      - "-XX:MaxGCPauseMillis=200"
+      - "-XX:+UnlockExperimentalVMOptions"
+      - "-XX:+UseCGroupMemoryLimitForHeap"
+      - "-XX:InitiatingHeapOccupancyPercent=45"
+      - "-XX:G1ReservePercent=20"
+      - "-XX:G1HeapRegionSize=32m"
+      - "-Djava.awt.headless=true"
+      - "-Datlassian.plugins.enable.wait=300"
+      - "-Dhazelcast.phone.home.enabled=false"
+      - "-Dhazelcast.logging.type=slf4j"
+      - "-Dhazelcast.health.monitoring.level=SILENT"
+      - "-Dbamboo.darkfeature.concurrentbuilds=true"
+      - "-XX:+HeapDumpOnOutOfMemoryError"
+      - "-XX:HeapDumpPath=/var/atlassian/application-data/bamboo/heap-dumps"
+      # Java 17 specific optimizations
+      - "-XX:+UseStringDeduplication"
+      - "--add-opens=java.base/java.lang=ALL-UNNAMED"
+      - "--add-opens=java.base/java.io=ALL-UNNAMED"
+      - "--add-opens=java.rmi/sun.rmi.transport=ALL-UNNAMED"
+      
+  # Tomcat connector configuration
+  tomcat:
+    maxThreads: 150
+    minSpareThreads: 25
+    connectionTimeout: 20000
+    acceptCount: 100
+    enableLookups: false
+    maxHttpHeaderSize: 8192
+    protocol: "HTTP/1.1"
+    redirectPort: 8443
+    compression: "on"
+    compressableMimeType: "text/html,text/xml,text/plain,text/css,application/json,application/javascript"
+    
+  # Shutdown configuration
+  shutdown:
+    terminationGracePeriodSeconds: 30
+    command: "/shutdown-wait.sh"
+
+# ============================================================================
+# DATABASE CONFIGURATION - External PostgreSQL
+# Minimum PostgreSQL version: 13+
+# Recommended: PostgreSQL 14 or 15 for best performance
+# ============================================================================
+database:
+  type: "postgresql"
+  
+  # Use external database (not in-cluster)
+  embedded: false
+  
+  # Connection details
+  url: "jdbc:postgresql://bamboo-postgres.example.com:5432/bamboo"
+  driver: "org.postgresql.Driver"
+  
+  # Credentials from external secret
+  credentials:
+    secretName: "bamboo-db-credentials"
+    usernameKey: "username"
+    passwordKey: "password"
+  
+  # Connection pool settings - Production optimized
+  pool:
+    minSize: 20
+    maxSize: 100
+    maxWait: 30000
+    maxIdle: 20
+    removeAbandoned: true
+    removeAbandonedTimeout: 300
+    testOnBorrow: true
+    testWhileIdle: true
+    timeBetweenEvictionRunsMillis: 60000
+    minEvictableIdleTimeMillis: 300000
+    validationQuery: "SELECT 1"
+
+# ============================================================================
+# VOLUMES - Persistent Storage Strategy
+# ============================================================================
+volumes:
+  # Local home for each pod - Fast ephemeral or block storage
+  localHome:
+    persistentVolumeClaim:
+      create: true
+      storageClassName: "gp3-encrypted"  # AWS EBS gp3
+      accessMode: ReadWriteOnce
+      resources:
+        requests:
+          storage: 50Gi
+    mountPath: /var/atlassian/application-data/bamboo
+    
+  # Shared home - Required for clustering (NFS/EFS)
+  sharedHome:
+    persistentVolumeClaim:
+      create: false
+      claimName: "bamboo-shared-home-pvc"  # Pre-created PVC
+    subPath: ""
+    mountPath: /var/atlassian/application-data/bamboo/shared
+    nfsPermissionFixer:
+      enabled: true
+      mountPath: /shared-home
+      imageRepo: alpine
+      imageTag: latest
+      command: 
+        - sh
+        - -c
+        - |
+          set -e
+          chown -R 2005:2005 /shared-home
+          chmod -R 770 /shared-home
+  
+  # Additional volumes for artifacts/logs (optional S3 backend)
+  additionalVolumes: []
+  additionalMounts: []
+  
+  # Temp directory
+  temp:
+    emptyDir:
+      sizeLimit: "10Gi"
+
+# ============================================================================
+# HAZELCAST CLUSTERING CONFIGURATION
+# ============================================================================
+hazelcast:
+  # Hazelcast for cluster communication
+  enabled: true
+  port: 5701
+  
+  # Kubernetes discovery configuration
+  discovery:
+    method: "kubernetes"
+    kubernetes:
+      enabled: true
+      namespace: ""  # Same as deployment namespace
+      serviceName: "bamboo-dc"
+      serviceLabelName: "app.kubernetes.io/name"
+      serviceLabelValue: "bamboo"
+  
+  # Network configuration
+  network:
+    tcpip:
+      enabled: false
+    multicast:
+      enabled: false
+    kubernetes:
+      enabled: true
+  
+  # Performance tuning
+  properties:
+    hazelcast.operation.thread.count: 4
+    hazelcast.io.thread.count: 4
+    hazelcast.operation.generic.thread.count: 4
+    hazelcast.partition.count: 271
+    hazelcast.logging.type: slf4j
+    hazelcast.phone.home.enabled: false
+    hazelcast.health.monitoring.level: SILENT
+    hazelcast.heartbeat.interval.seconds: 5
+    hazelcast.max.no.heartbeat.seconds: 30
+    hazelcast.icmp.enabled: true
+    hazelcast.shutdownhook.enabled: true
+    hazelcast.graceful.shutdown.max.wait: 120
+
+# ============================================================================
+# SERVICE CONFIGURATION
+# ============================================================================
+service:
+  # Main HTTP service
+  type: ClusterIP
+  port: 80
+  targetPort: 8085
+  protocol: TCP
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "http"
+    service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "arn:aws:acm:region:account:certificate/xxx"
+    service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
+  labels: {}
+  
+  # Session affinity for sticky sessions
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800  # 3 hours
+  
+  # LoadBalancer specific (if using type: LoadBalancer)
+  loadBalancerIP: ""
+  loadBalancerSourceRanges: []
+  # - "10.0.0.0/8"
+  # - "172.16.0.0/12"
+
+# Headless service for Hazelcast
+serviceHeadless:
+  enabled: true
+  port: 5701
+
+# ============================================================================
+# INGRESS CONFIGURATION
+# ============================================================================
+ingress:
+  enabled: true
+  className: "nginx"
+  
+  annotations:
+    # Sticky sessions
+    nginx.ingress.kubernetes.io/affinity: "cookie"
+    nginx.ingress.kubernetes.io/session-cookie-name: "BAMBOO_ROUTE"
+    nginx.ingress.kubernetes.io/session-cookie-hash: "sha1"
+    nginx.ingress.kubernetes.io/session-cookie-max-age: "10800"
+    nginx.ingress.kubernetes.io/session-cookie-path: "/"
+    nginx.ingress.kubernetes.io/session-cookie-change-on-failure: "true"
+    
+    # Security headers
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/ssl-protocols: "TLSv1.2 TLSv1.3"
+    
+    # Timeouts for long-running operations
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-body-size: "250m"
+    
+    # Rate limiting
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    
+    # WebSocket support
+    nginx.ingress.kubernetes.io/websocket-services: "bamboo-dc"
+    
+    # WAF / ModSecurity (optional)
+    # nginx.ingress.kubernetes.io/enable-modsecurity: "true"
+    # nginx.ingress.kubernetes.io/enable-owasp-core-rules: "true"
+    
+    # External DNS (if using)
+    external-dns.alpha.kubernetes.io/hostname: "bamboo.example.com"
+    
+    # Cert Manager (if using)
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  
+  hosts:
+    - host: bamboo.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  
+  tls:
+    - secretName: bamboo-tls-cert
+      hosts:
+        - bamboo.example.com
+
+# ============================================================================
+# RESOURCES - Production Sizing
+# ============================================================================
+resources:
+  jvm:
+    maxHeap: "4096m"
+    minHeap: "2048m"
+  
+  container:
+    requests:
+      cpu: "2000m"      # 2 CPU cores minimum
+      memory: "6Gi"     # 6GB RAM minimum
+    limits:
+      cpu: "4000m"      # 4 CPU cores maximum
+      memory: "8Gi"     # 8GB RAM maximum
+
+# ============================================================================
+# HEALTH CHECKS - Kubernetes Probes
+# ============================================================================
+# Startup probe - Initial startup check
+startupProbe:
+  enabled: true
+  httpGet:
+    path: /
+    port: 8085
+  initialDelaySeconds: 60
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 30  # 5 minutes to start
+  successThreshold: 1
+
+# Liveness probe - Application is alive
+livenessProbe:
+  enabled: true
+  httpGet:
+    path: /rest/api/latest/status
+    port: 8085
+  initialDelaySeconds: 180
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 6
+  successThreshold: 1
+
+# Readiness probe - Ready to accept traffic
+readinessProbe:
+  enabled: true
+  httpGet:
+    path: /rest/api/latest/status
+    port: 8085
+  initialDelaySeconds: 60
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+  successThreshold: 1
+
+# ============================================================================
+# POD SCHEDULING & AFFINITY
+# ============================================================================
+# Node selection
+nodeSelector: {}
+# node.kubernetes.io/instance-type: c5.2xlarge
+# topology.kubernetes.io/zone: us-east-1a
+
+# Tolerations for dedicated nodes
+tolerations: []
+# - key: "bamboo"
+#   operator: "Equal"
+#   value: "true"
+#   effect: "NoSchedule"
+
+# Anti-affinity - spread pods across nodes/AZs
+affinity:
+  podAntiAffinity:
+    # Prefer different nodes
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - bamboo
+          topologyKey: kubernetes.io/hostname
+      # Prefer different availability zones
+      - weight: 90
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - bamboo
+          topologyKey: topology.kubernetes.io/zone
+
+# Topology spread constraints - even distribution
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: bamboo
+
+# ============================================================================
+# SECURITY CONTEXT
+# ============================================================================
+podSecurityContext:
+  runAsUser: 2005
+  runAsGroup: 2005
+  fsGroup: 2005
+  fsGroupChangePolicy: "OnRootMismatch"
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 2005
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false  # Bamboo needs write access
+  capabilities:
+    drop:
+      - ALL
+    add:
+      - NET_BIND_SERVICE  # If binding to ports < 1024
+
+# ============================================================================
+# RBAC CONFIGURATION
+# ============================================================================
+serviceAccount:
+  create: true
+  name: "bamboo-sa"
+  automount: true
+  
+  annotations:
+    # AWS IRSA annotation for S3/EFS access
+    eks.amazonaws.com/role-arn: "arn:aws:iam::123456789012:role/bamboo-irsa-role"
+    # GCP Workload Identity (if using GCP)
+    # iam.gke.io/gcp-service-account: "bamboo-sa@project-id.iam.gserviceaccount.com"
+    # Azure Workload Identity (if using Azure)
+    # azure.workload.identity/client-id: "client-id"
+    # azure.workload.identity/tenant-id: "tenant-id"
+
+rbac:
+  create: true
+  
+  # Cluster-wide permissions (use sparingly)
+  clusterRole: false
+  clusterRoleRules: []
+  
+  # Namespace-scoped permissions
+  rules:
+    # Required for Hazelcast Kubernetes discovery
+    - apiGroups: [""]
+      resources: ["endpoints", "pods", "services"]
+      verbs: ["get", "list", "watch"]
+    
+    # Optional: ConfigMap access for dynamic config
+    - apiGroups: [""]
+      resources: ["configmaps"]
+      verbs: ["get", "list", "watch"]
+    
+    # Optional: Secret access (if using k8s secrets)
+    - apiGroups: [""]
+      resources: ["secrets"]
+      verbs: ["get"]
+      resourceNames: ["bamboo-db-credentials", "bamboo-license-secret"]
+
+# Additional RoleBindings for cross-namespace access
+additionalRoleBindings: []
+# - name: bamboo-monitoring-access
+#   namespace: monitoring
+#   roleRef:
+#     apiGroup: rbac.authorization.k8s.io
+#     kind: Role
+#     name: prometheus-k8s
+#   subjects:
+#     - kind: ServiceAccount
+#       name: bamboo-sa
+#       namespace: bamboo
+
+# ============================================================================
+# POD DISRUPTION BUDGET
+# ============================================================================
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+  # maxUnavailable: 1
+  # Use one or the other, not both
+
+# ============================================================================
+# AUTOSCALING (HPA)
+# ============================================================================
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 75
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+
+# ============================================================================
+# UPDATE STRATEGY
+# ============================================================================
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0  # Zero-downtime deployments
+
+# ============================================================================
+# ENVIRONMENT VARIABLES
+# ============================================================================
+additionalEnvironmentVariables:
+  # Timezone
+  - name: TZ
+    value: "UTC"
+  
+  # Cluster node identification
+  - name: BAMBOO_NODE_ID
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.name
+  
+  - name: BAMBOO_CLUSTER_NODE_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.name
+  
+  - name: K8S_NAMESPACE
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.namespace
+  
+  - name: K8S_POD_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.name
+  
+  - name: K8S_POD_IP
+    valueFrom:
+      fieldRef:
+        fieldPath: status.podIP
+  
+  # Hazelcast Kubernetes discovery
+  - name: HAZELCAST_KUBERNETES_NAMESPACE
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.namespace
+  
+  - name: HAZELCAST_KUBERNETES_SERVICE_NAME
+    value: "bamboo-dc"
+  
+  # Performance tuning
+  - name: BAMBOO_MAX_CONCURRENT_BUILDS
+    value: "4"
+  
+  # AWS specific (if using)
+  - name: AWS_REGION
+    value: "us-east-1"
+  
+  # Logging
+  - name: BAMBOO_LOG_STDOUT
+    value: "true"
+
+# Load secrets from ConfigMap
+additionalConfigMapEnvFrom: []
+# - bamboo-app-config
+
+# Load secrets from Secret
+additionalSecretEnvFrom: []
+# - bamboo-app-secrets
+
+# ============================================================================
+# INIT CONTAINERS
+# ============================================================================
+additionalInitContainers:
+  # Wait for database
+  - name: wait-for-database
+    image: busybox:1.36
+    command:
+      - sh
+      - -c
+      - |
+        echo "Waiting for PostgreSQL at bamboo-postgres.example.com:5432"
+        until nc -z bamboo-postgres.example.com 5432; do
+          echo "PostgreSQL is unavailable - sleeping"
+          sleep 5
+        done
+        echo "PostgreSQL is up - executing command"
+  
+  # Permissions fixer for shared home
+  - name: shared-home-permissions
+    image: alpine:3.19
+    command:
+      - sh
+      - -c
+      - |
+        echo "Fixing shared home permissions..."
+        if [ -d "/shared-home" ]; then
+          chown -R 2005:2005 /shared-home 2>/dev/null || true
+          chmod -R 770 /shared-home 2>/dev/null || true
+          echo "Shared home permissions fixed"
+        else
+          echo "Shared home not found, skipping..."
+        fi
+    volumeMounts:
+      - name: shared-home
+        mountPath: /shared-home
+    securityContext:
+      runAsUser: 0
+      runAsNonRoot: false
+
+# ============================================================================
+# ADDITIONAL CONTAINERS (SIDECARS)
+# ============================================================================
+additionalContainers: []
+# Example: Log shipper sidecar
+# - name: fluent-bit
+#   image: fluent/fluent-bit:2.1
+#   volumeMounts:
+#     - name: local-home
+#       mountPath: /var/atlassian/application-data/bamboo
+#       readOnly: true
+#     - name: fluent-bit-config
+#       mountPath: /fluent-bit/etc/
+
+# ============================================================================
+# MONITORING & OBSERVABILITY
+# ============================================================================
+monitoring:
+  # JMX Exporter for Prometheus
+  jmxExporter:
+    enabled: false
+    port: 9999
+    imageRepo: bitnami/jmx-exporter
+    imageTag: 0.20.0
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi
+  
+  # ServiceMonitor for Prometheus Operator
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+    # release: prometheus
+
+  # Grafana Dashboard
+  grafanaDashboard:
+    enabled: false
+    labels: {}
+    # grafana_dashboard: "1"
+
+# ============================================================================
+# LIFECYCLE HOOKS
+# ============================================================================
+lifecycle:
+  preStop:
+    exec:
+      command:
+        - sh
+        - -c
+        - |
+          echo "Gracefully shutting down Bamboo..."
+          sleep 15
+
+# ============================================================================
+# POD LABELS & ANNOTATIONS
+# ============================================================================
+podLabels:
+  app.kubernetes.io/component: "server"
+  app.kubernetes.io/part-of: "bamboo-datacenter"
+  version: "10.2.8"
+  environment: "production"
+
+podAnnotations:
+  # Prometheus scraping
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8085"
+  prometheus.io/path: "/rest/api/latest/status"
+  
+  # Backup annotations
+  backup.velero.io/backup-volumes: "shared-home"
+  
+  # Force pod restart on config change
+  checksum/config: ""  # Will be auto-calculated by Helm
+
+# ============================================================================
+# NETWORK POLICY (Optional but recommended)
+# ============================================================================
+networkPolicy:
+  enabled: false
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8085
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: bamboo
+      ports:
+        - protocol: TCP
+          port: 5701  # Hazelcast
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 5432  # PostgreSQL
+        - protocol: TCP
+          port: 443   # HTTPS
+        - protocol: TCP
+          port: 53    # DNS
+        - protocol: UDP
+          port: 53    # DNS
+
+# ============================================================================
+# PRIORITY CLASS
+# ============================================================================
+priorityClassName: ""
+# system-cluster-critical
+
+# ============================================================================
+# DNS CONFIGURATION
+# ============================================================================
+dnsPolicy: ClusterFirst
+dnsConfig: {}
+# options:
+#   - name: ndots
+#     value: "2"
+#   - name: edns0
+
+# ============================================================================
+# BAMBOO AGENTS (Remote Agents Configuration)
+# ============================================================================
+agents:
+  # Agent broker configuration
+  broker:
+    enabled: true
+    port: 54663
+    
+  # Security token for agents
+  securityToken:
+    secretName: "bamboo-agent-token"
+    secretKey: "security-token"
+
+# ============================================================================
+# BACKUP CONFIGURATION (Using Velero or similar)
+# ============================================================================
+backup:
+  enabled: false
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  retention: 7  # days
+  
+  # Velero specific
+  velero:
+    enabled: false
+    excludeResources:
+      - pods
+      - replicasets
+    
+# ============================================================================
+# ADDITIONAL FEATURES
+# ============================================================================
+
+# Enable Admin webhook for cluster management
+adminWebhook:
+  enabled: false
+
+# Shared home synchronization
+sharedHomeSynchronizer:
+  enabled: false
+  schedule: "*/5 * * * *"
+
+# Cache warming on startup
+cacheWarming:
+  enabled: false
+
+# ============================================================================
+# CUSTOM VALUES - Extend as needed
+# ============================================================================
+# Add your custom values here
+# custom:
+#   myFeature: true
